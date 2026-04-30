@@ -1,34 +1,12 @@
-"""
-terraform_agent.py — Agent 3: Terraform Generator Agent (Azure Agent Framework SDK)
-
-Uses the Azure Agent Framework SDK (agent-framework RC5).
-
-Responsibilities (per PlanUnit):
-  1. Fetch module README at runtime → know required vs optional variables (Req 7)
-  2. Fetch latest module commit hash → pin source to exact version (Req 5)
-  3. Generate main.tf + variables.tf using module blocks only (Req 6)
-  4. Run 3 evaluators (correctness, security, compliance)
-  5. Retry generation with evaluator feedback if any evaluator fails (up to 2 retries)
-  6. Return TerraformOutput — file push and PR creation are handled by workflow.py
-
-This agent does NOT push files.  workflow.py calls push_unit_terraform after
-run_terraform_agent succeeds, keeping push logic separate from codegen logic.
-"""
-
 from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 from dataclasses import dataclass
 from typing import Callable, List, Optional
 
-from autogen_agentchat.agents import AssistantAgent
-from autogen_ext.models.openai import AzureOpenAIChatCompletionClient
-
 from agents.client import get_model_client
-
 from mcp.github import get_latest_module_version, read_module_readme
 from orchestrator.models import EvaluatorResult, PlanUnit, WorkflowRun
 
@@ -36,33 +14,18 @@ logger = logging.getLogger(__name__)
 
 MAX_EVAL_RETRIES = 2
 
-# ---------------------------------------------------------------------------
-# Output contract
-# ---------------------------------------------------------------------------
-
 
 @dataclass
 class TerraformOutput:
-    """Generated Terraform for one infra unit."""
-
     unit_id: str
     main_tf: str
     variables_tf: str
     eval_results: List[EvaluatorResult]
     passed: bool
-    module_version: str = "main"   # commit SHA used in module source
+    module_version: str = "main"
 
-
-# ---------------------------------------------------------------------------
-# Evaluator type alias
-# Plain functions injected for testability — not MAF agents.
-# ---------------------------------------------------------------------------
 
 EvaluatorFn = Callable[[str, str, str], EvaluatorResult]
-
-# ---------------------------------------------------------------------------
-# System prompt
-# ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = """\
 You are a Terraform code generator for Azure infrastructure.
@@ -93,46 +56,17 @@ Output ONLY this JSON — no prose, no markdown fences:
 """
 
 
-# ---------------------------------------------------------------------------
-# Model client
-# ---------------------------------------------------------------------------
-
-
-def _build_model_client():
-    return get_model_client()
-
-
-# ---------------------------------------------------------------------------
-# Module metadata helpers (Req 5 + 7)
-# ---------------------------------------------------------------------------
-
-
 async def _fetch_module_context(
     unit_type: str,
     org: str,
     modules_repo: str,
 ) -> tuple[str, str]:
-    """Return (readme_text, commit_sha) for a module type.
-
-    Both are fetched from GitHub at runtime so the agent always uses the
-    latest version and knows the exact variable contract.
-    """
-    readme, sha = await _gather(
+    import asyncio
+    readme, sha = await asyncio.gather(
         read_module_readme(unit_type, org, modules_repo),
         get_latest_module_version(unit_type, org, modules_repo),
     )
     return readme, sha
-
-
-async def _gather(coro1, coro2):
-    """Run two coroutines concurrently."""
-    import asyncio
-    return await asyncio.gather(coro1, coro2)
-
-
-# ---------------------------------------------------------------------------
-# Prompt builder
-# ---------------------------------------------------------------------------
 
 
 def _build_user_message(
@@ -176,13 +110,7 @@ def _build_user_message(
     return "\n".join(parts)
 
 
-# ---------------------------------------------------------------------------
-# Output parser
-# ---------------------------------------------------------------------------
-
-
 def _parse_terraform_output(raw: str) -> tuple[str, str]:
-    """Parse {main_tf, variables_tf} JSON from agent output."""
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
@@ -200,11 +128,6 @@ def _parse_terraform_output(raw: str) -> tuple[str, str]:
     return main_tf, variables_tf
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-
 async def run_terraform_agent(
     unit: PlanUnit,
     run: WorkflowRun,
@@ -212,39 +135,21 @@ async def run_terraform_agent(
     org: str,
     modules_repo: str,
 ) -> TerraformOutput:
-    """Generate and evaluate Terraform for a single infra unit.
-
-    Args:
-        unit:         The PlanUnit to generate Terraform for. unit.resolved_repo
-                      (set by GH Search Agent) takes precedence over modules_repo.
-        run:          The active WorkflowRun (ticket context + environment).
-        evaluators:   List of evaluator functions (correctness, security, compliance).
-                      Each: (main_tf, variables_tf, ticket_id) -> EvaluatorResult
-        org:          GitHub org owning the modules repo.
-        modules_repo: Fallback repo if unit.resolved_repo is not set.
-
-    Returns:
-        TerraformOutput with HCL content, evaluation results, and module SHA used.
-        Does NOT push files — workflow.py handles that after all units pass.
-    """
     ticket_id = run.request.ticket_id if run.request else "UNKNOWN"
     environment = run.request.environment if run.request else "dev"
 
-    # GH Search Agent resolves the repo per unit; fall back to env var default
     repo = unit.resolved_repo or modules_repo
 
-    # Fetch module README and latest commit SHA in parallel
     module_readme, module_sha = await _fetch_module_context(unit.type, org, repo)
     logger.info(
         "unit=%s module=%s sha=%s readme=%d chars",
         unit.id, unit.type, module_sha[:7] if module_sha != "main" else "main", len(module_readme),
     )
 
-    model_client = _build_model_client()
-    agent = AssistantAgent(
+    client = get_model_client()
+    agent = client.as_agent(
         name="azure_tf_generator",
-        system_message=_SYSTEM_PROMPT,
-        model_client=model_client,
+        instructions=_SYSTEM_PROMPT,
     )
 
     feedback: Optional[str] = None
@@ -262,11 +167,10 @@ async def run_terraform_agent(
             feedback=feedback,
         )
 
-        result = await agent.run(task=user_message)
-        raw = result.messages[-1].content
+        result = await agent.run(user_message)
+        raw = result.text
         main_tf, variables_tf = _parse_terraform_output(raw)
 
-        # Run all evaluators (plain function calls — not MAF agents)
         eval_results = [ev(main_tf, variables_tf, ticket_id) for ev in evaluators]
         passed = all(r.passed for r in eval_results)
 

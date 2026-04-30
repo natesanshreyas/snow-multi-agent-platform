@@ -1,102 +1,83 @@
 # snow-multi-agent-platform
 
-ServiceNow → Terraform multi-agent provisioning platform using **AutoGen 0.4 + Azure AI Foundry together**.
-
-AutoGen handles all agent orchestration. Azure AI Foundry provides the model deployment, managed identity credential chain, and portal observability. Neither is exclusive — they solve different problems.
+ServiceNow → Terraform multi-agent provisioning platform using **Microsoft Agent Framework SDK + Azure AI Foundry**.
 
 ---
 
-## Why both?
+## Architecture
 
-| | AutoGen (`autogen-agentchat`) | Foundry (`azure-ai-projects`) |
+A ServiceNow ticket triggers an agentic pipeline that plans, searches, generates, and evaluates Terraform — then opens a PR back to the ticket.
+
+| Agent | File | Responsibility |
 |---|---|---|
-| What it does | Multi-agent orchestration patterns | Model hosting, credentials, observability |
-| `RoundRobinGroupChat` | ✅ | ❌ |
-| `UserProxyAgent` (HITL) | ✅ | ❌ |
-| Evaluator retry loop | ✅ | ❌ |
-| Managed identity (no API keys) | ❌ | ✅ |
-| Foundry portal tracing | ❌ | ✅ |
-| Model deployment management | ❌ | ✅ |
+| Router | `orchestrator/router_agent.py` | Classify ticket → azure / aws / snowflake |
+| Planner | `agents/azure/planner_agent.py` | Decompose ticket into infra units + HITL questions |
+| GitHub Search | `agents/github_search_agent.py` | Resolve Terraform module repo per unit type |
+| Terraform Generator | `agents/azure/terraform_agent.py` | Generate main.tf + variables.tf, retry on eval failure |
 
-AutoGen is the framework. Foundry is the platform. They're designed to be used together.
+Evaluators (correctness, security, compliance) are plain functions — not agents.
 
 ---
 
-## How they connect (`agents/client.py`)
+## Agent pattern (`agents/client.py`)
+
+All agents use Microsoft Agent Framework SDK with Azure OpenAI backed by managed identity:
 
 ```python
-# azure-ai-projects: Foundry project connection + credential chain
-project_client = AIProjectClient(
-    endpoint=os.environ["AZURE_AI_PROJECT_ENDPOINT"],
-    credential=DefaultAzureCredential(),   # managed identity / az login
+from agent_framework.azure import AzureOpenAIChatClient
+from azure.identity import DefaultAzureCredential
+
+client = AzureOpenAIChatClient(
+    endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+    deployment=os.environ["AZURE_AI_MODEL_DEPLOYMENT"],
+    credential=DefaultAzureCredential(),
 )
 
-# azure-identity: token provider for Azure OpenAI (no API key needed)
-token_provider = get_bearer_token_provider(
-    DefaultAzureCredential(),
-    "https://cognitiveservices.azure.com/.default",
-)
-
-# autogen-ext: AutoGen-compatible client backed by Foundry-managed Azure OpenAI
-model_client = AzureOpenAIChatCompletionClient(
-    azure_deployment="gpt-4o",
-    azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-    azure_ad_token_provider=token_provider,   # from Foundry credential chain
-)
-
-# autogen-agentchat: agent orchestration — same patterns as always
-agent = AssistantAgent(name="azure_planner", model_client=model_client, ...)
-result = await agent.run(task=ticket_details)
+agent = client.as_agent(name="azure_planner", instructions="...")
+result = await agent.run(ticket_message)
+raw = result.text
 ```
 
-Foundry telemetry (traces visible in Foundry portal):
-```python
-# demo_server.py calls this at startup
-connection_string = project_client.telemetry.get_connection_string()
-configure_azure_monitor(connection_string=connection_string)
-# AutoGen runs now appear under Tracing in the Foundry portal
-```
+`DefaultAzureCredential` picks up managed identity on Azure Container Apps and falls back to `az login` locally — no API keys in config.
 
 ---
 
-## The three AutoGen agents
+## Agents
 
-All three use the same AutoGen patterns as the pure AutoGen version, but the model client is backed by a Foundry-managed Azure OpenAI deployment.
+### Router (`orchestrator/router_agent.py`)
 
-### Agent 1 — Planner (`agents/azure/planner_agent.py`)
+Classifies the ticket to a cloud target. Falls back to a weighted keyword heuristic if the LLM is not configured.
 
 ```python
-# Initial turn
-agent = AssistantAgent(name="azure_planner", model_client=get_model_client(), ...)
-result = await agent.run(task=ticket_message)
-
-# HITL resume — RoundRobinGroupChat so the framework sees a real human turn
-planner = AssistantAgent(name="azure_planner", ...)
-human_proxy = UserProxyAgent(name="human_approver", input_func=_stored_answers_fn)
-team = RoundRobinGroupChat([planner, human_proxy], termination_condition=MaxMessageTermination(6))
-result = await team.run(task=ticket_with_answers)
+cloud, reasoning = await route_ticket(short_description, description)
+# cloud → "azure" | "aws" | "snowflake"
 ```
 
-### Agent 2 — GitHub Search (`agents/github_search_agent.py`)
+### Planner (`agents/azure/planner_agent.py`)
+
+Decomposes the ticket into typed infra units with dependency ordering. Raises HITL questions for ambiguous resource group decisions; resumes with human answers folded into the next run.
 
 ```python
-agent = AssistantAgent(name="github_search_agent", model_client=get_model_client(), ...)
-result = await agent.run(task=search_summary)
+plan = await run_planner_agent(request, scan_results=scan, human_answers=answers)
+# plan.units → [PlanUnit], plan.questions → [str]
 ```
 
-### Agent 3 — Terraform Generator (`agents/azure/terraform_agent.py`)
+### GitHub Search (`agents/github_search_agent.py`)
+
+Searches the GitHub org for repos containing each module type. Short-circuits the LLM call when all types resolve to exactly one repo.
 
 ```python
-agent = AssistantAgent(name="azure_tf_generator", model_client=get_model_client(), ...)
+repo_map = await run_github_search_agent(unit_types, org)
+# {"resource_group": "terraform-azure-modules", ...}
+```
 
-for attempt in range(MAX_EVAL_RETRIES + 2):
-    result = await agent.run(task=build_prompt(unit, feedback=feedback))
-    main_tf, variables_tf = parse(result.messages[-1].content)
+### Terraform Generator (`agents/azure/terraform_agent.py`)
 
-    eval_results = [ev(main_tf, variables_tf, ticket_id) for ev in evaluators]
-    if all(r.passed for r in eval_results):
-        break
-    feedback = format_failures(eval_results)
+Generates `main.tf` + `variables.tf` per infra unit using the module README and latest commit SHA fetched at runtime. Retries up to `MAX_EVAL_RETRIES` times with evaluator feedback.
+
+```python
+output = await run_terraform_agent(unit, run, evaluators, org, modules_repo)
+# output.main_tf, output.variables_tf, output.passed
 ```
 
 ---
@@ -106,24 +87,23 @@ for attempt in range(MAX_EVAL_RETRIES + 2):
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # fill in credentials
+cp .env.example .env   # fill in AZURE_OPENAI_ENDPOINT + AZURE_AI_MODEL_DEPLOYMENT
 python -m uvicorn demo_server:app --port 8001 --reload
 ```
 
-No credentials at all? Use `MOCK_LLM=true` — AutoGen still runs end-to-end, the LLM returns hardcoded responses.
+### Required env vars
+
+| Variable | Purpose |
+|---|---|
+| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint URL |
+| `AZURE_AI_MODEL_DEPLOYMENT` | Deployment name (e.g. `gpt-4o`) |
+| `AZURE_OPENAI_API_KEY` | Optional — omit to use managed identity |
+| `GITHUB_TOKEN` | GitHub API access for module search + PR creation |
+| `GITHUB_ORG` | GitHub org owning the Terraform module repos |
+
+### Local auth (no managed identity)
 
 ```bash
-MOCK_LLM=true python -m uvicorn demo_server:app --port 8001 --reload
+az login
+# DefaultAzureCredential picks up the az login session automatically
 ```
-
----
-
-## Repo comparison
-
-| Repo | SDK | Agent runtime | Model | Tracing |
-|---|---|---|---|---|
-| [snow-multi-agent-autogen](https://github.com/natesanshreyas/snow-multi-agent-autogen) | `autogen-agentchat` | In-process | Any OpenAI-compatible | App logs |
-| [snow-multi-agent-foundry](https://github.com/natesanshreyas/snow-multi-agent-foundry) | `azure-ai-projects` | Azure (Foundry manages it) | Foundry deployment | Foundry portal |
-| **snow-multi-agent-platform** (this repo) | **Both** | **In-process (AutoGen)** | **Foundry deployment** | **Foundry portal** |
-
-This repo is the recommended production starting point — you get AutoGen's orchestration patterns and Foundry's managed infrastructure.

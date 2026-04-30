@@ -1,34 +1,12 @@
-"""
-github_search_agent.py — Agent 2: GitHub Search Agent
-
-Resolves which GitHub repo contains the Terraform module for each infra unit
-type in the plan. Eliminates hardcoded repo names — the agent searches the
-org at runtime and reasons about which repo to use.
-
-Responsibilities:
-- For each unit type from the Planner's output, call the GitHub code search API
-- Receive the candidate repos per type as tool context
-- Reason about the best match (consider environment, repo name, recency)
-- Return a {unit_type: repo_name} mapping used by the TF Generator Agent
-
-Output contract: Dict[str, str] — {unit_type: repo_name}
-Missing entries mean no repo was found; the TF agent will skip those units.
-"""
-
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-import os
 import re
-from typing import Dict, List, Optional
-
-from autogen_agentchat.agents import AssistantAgent
-from autogen_ext.models.openai import AzureOpenAIChatCompletionClient
+from typing import Dict, List
 
 from agents.client import get_model_client
-
 from mcp.github import search_module_repos
 
 logger = logging.getLogger(__name__)
@@ -57,10 +35,6 @@ Output ONLY a JSON object — no prose, no markdown:
 """
 
 
-def _make_model_client():
-    return get_model_client()
-
-
 def _parse_mapping(raw: str) -> Dict[str, str]:
     try:
         return json.loads(raw)
@@ -75,17 +49,6 @@ async def run_github_search_agent(
     unit_types: List[str],
     org: str,
 ) -> Dict[str, str]:
-    """Search GitHub for repos containing each module type and return a mapping.
-
-    Args:
-        unit_types: List of module type strings from the Planner's Plan units
-                    (e.g. ["resource_group", "postgres_flex", "storage_account"])
-        org:        GitHub org to search within
-
-    Returns:
-        {unit_type: repo_name} — only includes types where a repo was found.
-    """
-    # Search all types concurrently
     search_results: Dict[str, List[str]] = {}
     results = await asyncio.gather(
         *[search_module_repos(t, org) for t in unit_types],
@@ -98,7 +61,6 @@ async def run_github_search_agent(
         else:
             search_results[unit_type] = result
 
-    # Short-circuit: if every type resolved unambiguously, skip the LLM call
     mapping: Dict[str, str] = {}
     ambiguous: Dict[str, List[str]] = {}
     for t, repos in search_results.items():
@@ -106,14 +68,17 @@ async def run_github_search_agent(
             mapping[t] = repos[0]
         elif len(repos) > 1:
             ambiguous[t] = repos
-        # len == 0: omit
 
     if not ambiguous:
         logger.info("GH Search Agent: all types resolved without LLM — %s", mapping)
         return mapping
 
-    # Build prompt for the LLM to resolve ambiguous cases
-    model_client = _make_model_client()
+    client = get_model_client()
+    agent = client.as_agent(
+        name="github_search_agent",
+        instructions=_SYSTEM_PROMPT,
+    )
+
     search_summary = json.dumps(search_results, indent=2)
     user_content = (
         f"GitHub org: {org}\n\n"
@@ -121,18 +86,10 @@ async def run_github_search_agent(
         f"Select the best repo for each type and return the JSON mapping."
     )
 
-    agent = AssistantAgent(
-        name="github_search_agent",
-        system_message=_SYSTEM_PROMPT,
-        model_client=model_client,
-    )
-
-    result = await agent.run(task=user_content)
-    raw = result.messages[-1].content
+    result = await agent.run(user_content)
+    raw = result.text
     logger.info("GH Search Agent output: %s", raw[:300])
 
     llm_mapping = _parse_mapping(raw)
-
-    # Merge: unambiguous results + LLM-resolved ambiguous ones
     mapping.update(llm_mapping)
     return mapping

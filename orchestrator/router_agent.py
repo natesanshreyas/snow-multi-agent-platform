@@ -1,27 +1,9 @@
-"""
-router_agent.py — Agentic cloud router.
-
-Analyzes a ServiceNow ticket and determines the target cloud platform.
-
-Primary path:  Azure OpenAI chat completion (if AZURE_OPENAI_* env vars set)
-Fallback path: Weighted keyword heuristic (works without any credentials)
-
-Returns (cloud, reasoning_sentence) so the UI can show the agent's thinking.
-"""
-
 from __future__ import annotations
 
 import logging
-import os
-from typing import Optional, Tuple
-
-import httpx
+from typing import Optional
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Heuristic signals per cloud (weighted: longer phrase = more specific = higher weight)
-# ---------------------------------------------------------------------------
 
 _SIGNALS: dict[str, list[str]] = {
     "azure": [
@@ -56,7 +38,7 @@ def _heuristic_route(text: str) -> tuple[str, str]:
     for cloud, signals in _SIGNALS.items():
         for signal in signals:
             if signal in text_lower:
-                scores[cloud] += len(signal.split())   # multi-word signals score higher
+                scores[cloud] += len(signal.split())
                 matched[cloud].append(signal)
 
     best = max(scores, key=lambda c: scores[c])
@@ -69,10 +51,6 @@ def _heuristic_route(text: str) -> tuple[str, str]:
         f"Routing to {best.upper()} IaC workflow."
     )
 
-
-# ---------------------------------------------------------------------------
-# LLM-based routing via Azure OpenAI
-# ---------------------------------------------------------------------------
 
 _SYSTEM = (
     "You are a cloud infrastructure routing agent inside a ServiceNow automation platform. "
@@ -92,43 +70,26 @@ Ticket:
 
 
 async def _llm_route(ticket_text: str) -> Optional[tuple[str, str]]:
-    endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "").rstrip("/")
-    api_key  = os.environ.get("AZURE_OPENAI_API_KEY", "")
-    deploy   = os.environ.get("AZURE_OPENAI_DEPLOYMENT_NAME", "")
-    version  = os.environ.get("AZURE_OPENAI_API_VERSION", "2025-04-01-preview")
-
-    if not (endpoint and deploy):
-        logger.debug("Azure OpenAI not configured — skipping LLM routing")
-        return None
-
-    url = f"{endpoint}/openai/deployments/{deploy}/chat/completions?api-version={version}"
-    headers: dict[str, str] = {"Content-Type": "application/json"}
-    if api_key:
-        headers["api-key"] = api_key
-
-    body = {
-        "messages": [
-            {"role": "system", "content": _SYSTEM},
-            {"role": "user",   "content": _USER_TMPL.format(ticket_text=ticket_text)},
-        ],
-        "max_tokens": 120,
-        "temperature": 0,
-    }
+    from agents.client import get_model_client
 
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(url, json=body, headers=headers, timeout=15)
+        client = get_model_client()
+    except RuntimeError:
+        logger.debug("LLM not configured — skipping LLM routing")
+        return None
 
-        if not resp.is_success:
-            logger.warning("LLM router HTTP %s: %s", resp.status_code, resp.text[:200])
-            return None
+    agent = client.as_agent(
+        name="cloud_router",
+        instructions=_SYSTEM,
+    )
 
-        raw = resp.json()["choices"][0]["message"]["content"].strip()
+    try:
+        result = await agent.run(_USER_TMPL.format(ticket_text=ticket_text))
+        raw = result.text.strip()
         lines = raw.split("\n", 1)
         cloud_raw = lines[0].strip().lower()
         reason = lines[1].strip() if len(lines) > 1 else "LLM decision."
 
-        # Extract cloud token from first line (model might add punctuation)
         for c in ("azure", "aws", "snowflake"):
             if c in cloud_raw:
                 logger.info("LLM router → %s: %s", c, reason)
@@ -140,11 +101,6 @@ async def _llm_route(ticket_text: str) -> Optional[tuple[str, str]]:
     except Exception as exc:
         logger.warning("LLM router error: %s", exc)
         return None
-
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 
 async def route_ticket(short_description: str, description: str) -> tuple[str, str]:
