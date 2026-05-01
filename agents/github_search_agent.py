@@ -18,7 +18,10 @@ from typing import Dict, List
 from agent_framework import tool
 
 from agents.client import get_model_client
+from observability import default_middleware, setup_telemetry
 from mcp.github import search_module_repos as _search_module_repos_raw
+
+setup_telemetry()  # idempotent, no-op unless ENABLE_TELEMETRY=true
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +95,7 @@ async def run_github_search_agent(
         name="github_search_agent",
         instructions=_SYSTEM_PROMPT,
         tools=[search_module_repos_tool],
+        middleware=default_middleware(),
     )
 
     user_content = (

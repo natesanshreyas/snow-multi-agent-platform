@@ -26,11 +26,14 @@ from typing import Callable, List, Optional
 from agent_framework import tool
 
 from agents.client import get_model_client
+from observability import default_middleware, setup_telemetry
 from mcp.github import (
     get_latest_module_version as _get_latest_module_version_raw,
     read_module_readme as _read_module_readme_raw,
 )
 from orchestrator.models import EvaluatorResult, PlanUnit, WorkflowRun
+
+setup_telemetry()  # idempotent, no-op unless ENABLE_TELEMETRY=true
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +189,7 @@ async def run_terraform_agent(
         name="azure_tf_generator",
         instructions=_SYSTEM_PROMPT,
         tools=[read_module_readme_tool, get_latest_module_version_tool],
+        middleware=default_middleware(),
     )
 
     feedback: Optional[str] = None

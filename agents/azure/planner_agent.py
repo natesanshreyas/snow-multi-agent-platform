@@ -6,7 +6,10 @@ import re
 from typing import Any, Dict, List, Optional
 
 from agents.client import get_model_client
+from observability import default_middleware, setup_telemetry
 from orchestrator.models import Plan, PlanUnit, SnowRequest, UnitConstraints
+
+setup_telemetry()  # idempotent, no-op unless ENABLE_TELEMETRY=true
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +129,7 @@ async def run_planner_agent(
     agent = client.as_agent(
         name="azure_planner",
         instructions=_SYSTEM_PROMPT,
+        middleware=default_middleware(),
     )
 
     user_content = _build_user_message(request, scan_results, human_answers)
