@@ -127,8 +127,8 @@ async def run(request: SnowRequest, run: WorkflowRun) -> None:
     store_run(run)
 
     # ── Step 4: Re-plan with scan context + human answers ───────────────────
-    # Uses UserProxyAgent (HITL path) when human_answers are present so the
-    # agent framework sees a proper human turn in the conversation.
+    # Re-runs the planner with human_answers folded in (HITL resume path) so
+    # the agent framework sees the human turn in the conversation history.
     logger.info("run=%s Step 4: re-planning (HITL=%s)", run.run_id, bool(run.human_answers))
     final_plan = await run_planner_agent(
         request=request,

@@ -1,7 +1,7 @@
 """
-demo_simulation.py — Workflow driver for the combined AutoGen + Foundry platform.
+demo_simulation.py — Workflow driver for the combined Microsoft Agent Framework + Foundry platform.
 
-AutoGen (autogen-agentchat) runs all agent orchestration.
+Microsoft Agent Framework (agent-framework) runs all agent orchestration.
 Azure AI Foundry (azure-ai-projects) backs the model and provides telemetry.
 """
 
@@ -18,7 +18,7 @@ from typing import Dict, List, Optional
 import httpx
 
 # ---------------------------------------------------------------------------
-# AutoGen agents backed by Foundry-managed model (agents.client resolves which).
+# Agent Framework agents backed by Foundry-managed model (agents.client resolves which).
 # ---------------------------------------------------------------------------
 try:
     from agents.azure.planner_agent import run_planner_agent as _run_planner_agent
@@ -667,7 +667,7 @@ async def simulate_workflow(run: WorkflowRun, cloud: str) -> None:
         f"feature/{ticket_id} created",
         duration_ms=800)
 
-    # ── Step 1: Initial planner — REAL AutoGen AssistantAgent via MAF ──────
+    # ── Step 1: Initial planner — REAL Microsoft Agent Framework agent ─────
     _step_set(run, "planner_initial", "running")
     if _AGENTS_AVAILABLE and run.request:
         try:
@@ -737,7 +737,7 @@ async def simulate_workflow(run: WorkflowRun, cloud: str) -> None:
     decision = "Using existing resource" if use_existing else "Creating new resource with unique suffix"
     _step_set(run, "hitl_checkpoint", "complete", f"Human answered · {decision}")
 
-    # ── Step 4: Final planner — REAL AutoGen RoundRobinGroupChat HITL path ─
+    # ── Step 4: Final planner — REAL Agent Framework agent (HITL re-plan) ──
     _step_set(run, "planner_final", "running")
     if _AGENTS_AVAILABLE and run.request:
         try:
@@ -879,7 +879,7 @@ async def simulate_workflow(run: WorkflowRun, cloud: str) -> None:
     _step_set(run, "cost_checkpoint", "complete",
               f"Approved · ${total_usd:.0f}/mo · {quota_detail}")
 
-    # ── GH Search Agent — REAL AutoGen AssistantAgent resolves repo per type ─
+    # ── GH Search Agent — REAL Agent Framework agent resolves repo per type ─
     _step_set(run, "gh_search", "running")
     module_repo = _CLOUD_MODULE_REPOS.get(cloud, f"{_MODULES_ORG}/{_MODULES_REPO}")
     org_name    = module_repo.split("/")[0] if "/" in module_repo else _MODULES_ORG
@@ -958,8 +958,8 @@ async def simulate_workflow(run: WorkflowRun, cloud: str) -> None:
                 duration_ms=random.randint(180, 450))
         store_run(run)
 
-        # ── TF Generator — REAL AutoGen AssistantAgent generates + evaluates HCL ──
-        # run_terraform_agent calls AssistantAgent.run() through the MAF runtime.
+        # ── TF Generator — REAL Agent Framework agent generates + evaluates HCL ──
+        # run_terraform_agent calls client.as_agent(...).run() via Microsoft Agent Framework.
         # With no Azure OpenAI credentials, MockModelClient returns realistic HCL.
         _wave_tf_outputs: Dict[str, str] = {}
         for unit_cfg in active_wave:

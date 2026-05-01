@@ -1,8 +1,9 @@
 """
-demo_server.py — Combined AutoGen + Azure AI Foundry platform.
+demo_server.py — Combined Microsoft Agent Framework + Azure AI Foundry platform.
 
-AutoGen (autogen-agentchat) runs all agent orchestration:
-  AssistantAgent, RoundRobinGroupChat, UserProxyAgent, evaluator loops.
+Microsoft Agent Framework (agent-framework) runs all agent orchestration:
+  client.as_agent(name=..., instructions=...) -> agent.run() loops with
+  evaluator-driven retries. Replaces the prior AutoGen 0.4 implementation.
 
 Azure AI Foundry (azure-ai-projects) provides:
   - Model deployment (Azure OpenAI backed by Foundry project)
