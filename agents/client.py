@@ -2,19 +2,23 @@
 client.py — Microsoft Agent Framework chat-client factory.
 
 Exposes:
-    get_model_client()        -> AzureOpenAIChatClient | OpenAIChatClient | MockModelClient
+    get_model_client()        -> OpenAIChatClient | MockModelClient
     enable_foundry_tracing()  -> wires Azure AI Foundry OpenTelemetry exporter (best effort)
 
-The agents (`agents/azure/planner_agent.py`, `agents/azure/terraform_agent.py`,
-`agents/github_search_agent.py`) consume the returned client uniformly:
+The agents consume the returned client uniformly:
 
     client = get_model_client()
-    agent  = client.as_agent(name=..., instructions=...)
+    agent  = client.as_agent(name=..., instructions=..., tools=[...])
     result = await agent.run(user_message)
     text   = result.text
 
-For local dev without credentials set MOCK_LLM=true and the mock client is
-returned (see agents/mock_client.py).
+Note: `agent_framework.openai.OpenAIChatClient` handles BOTH:
+  * OpenAI direct          - pass `api_key` (and optional `model`)
+  * Azure OpenAI service   - pass `azure_endpoint` + `api_version`
+                             plus either `api_key` or `credential` (managed identity)
+
+For local dev without credentials set MOCK_LLM=true and the duck-typed
+`MockModelClient` is returned (see agents/mock_client.py).
 """
 
 from __future__ import annotations
@@ -23,6 +27,9 @@ import logging
 import os
 
 logger = logging.getLogger(__name__)
+
+# Azure OpenAI Responses API version used when caller does not override.
+_DEFAULT_AZURE_API_VERSION = "2025-04-01-preview"
 
 
 def get_model_client():
@@ -41,20 +48,23 @@ def get_model_client():
                   or os.environ.get("AZURE_OPENAI_DEPLOYMENT_NAME", ""))
 
     if endpoint and deployment:
-        from agent_framework.azure import AzureOpenAIChatClient
+        from agent_framework.openai import OpenAIChatClient
+        api_version = os.environ.get("AZURE_OPENAI_API_VERSION", _DEFAULT_AZURE_API_VERSION)
         api_key = os.environ.get("AZURE_OPENAI_API_KEY", "")
         if api_key:
-            logger.info("Agent Framework: AzureOpenAIChatClient + API key  deployment=%s", deployment)
-            return AzureOpenAIChatClient(
-                endpoint=endpoint,
-                deployment=deployment,
+            logger.info("Agent Framework: OpenAIChatClient + Azure + API key  deployment=%s", deployment)
+            return OpenAIChatClient(
+                model=deployment,
+                azure_endpoint=endpoint,
+                api_version=api_version,
                 api_key=api_key,
             )
         from azure.identity import DefaultAzureCredential
-        logger.info("Agent Framework: AzureOpenAIChatClient + managed identity  deployment=%s", deployment)
-        return AzureOpenAIChatClient(
-            endpoint=endpoint,
-            deployment=deployment,
+        logger.info("Agent Framework: OpenAIChatClient + Azure + managed identity  deployment=%s", deployment)
+        return OpenAIChatClient(
+            model=deployment,
+            azure_endpoint=endpoint,
+            api_version=api_version,
             credential=DefaultAzureCredential(),
         )
 

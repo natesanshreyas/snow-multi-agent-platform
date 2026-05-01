@@ -1,3 +1,20 @@
+"""
+terraform_agent.py — Generates Terraform HCL using Microsoft Agent Framework
+with real `agent_framework.tool` wrappers around the GitHub MCP fetchers.
+
+The agent is wired with two tools it can call autonomously:
+  - read_module_readme(module_type, org, modules_repo) -> str
+  - get_latest_module_version(module_type, org, modules_repo) -> str
+
+It receives the unit spec + ticket context in the user message, fetches the
+README and pinned commit SHA on its own, and returns
+{"main_tf": "...", "variables_tf": "..."} as JSON.
+
+Eval-driven retries (correctness / security / compliance) are managed in the
+workflow loop here; on failure the loop calls agent.run() again with feedback
+appended to the user message.
+"""
+
 from __future__ import annotations
 
 import json
@@ -6,8 +23,13 @@ import re
 from dataclasses import dataclass
 from typing import Callable, List, Optional
 
+from agent_framework import tool
+
 from agents.client import get_model_client
-from mcp.github import get_latest_module_version, read_module_readme
+from mcp.github import (
+    get_latest_module_version as _get_latest_module_version_raw,
+    read_module_readme as _read_module_readme_raw,
+)
 from orchestrator.models import EvaluatorResult, PlanUnit, WorkflowRun
 
 logger = logging.getLogger(__name__)
@@ -30,13 +52,21 @@ EvaluatorFn = Callable[[str, str, str], EvaluatorResult]
 _SYSTEM_PROMPT = """\
 You are a Terraform code generator for Azure infrastructure.
 
-Given an infrastructure unit spec, a module README, and the module's latest
-commit SHA, generate syntactically correct main.tf and variables.tf.
+You have two tools:
+  - read_module_readme(module_type, org, modules_repo) -> str
+        Returns the modules/{module_type}/README.md so you can identify the
+        required vs optional variables.
+  - get_latest_module_version(module_type, org, modules_repo) -> str
+        Returns the commit SHA on main that you must pin in the module
+        source URL.
+
+For the unit you are given, call BOTH tools first, then generate
+syntactically correct main.tf and variables.tf.
 
 === RULES ===
 
 1. Use module blocks exclusively — never raw resource blocks. (ENFORCED by evaluator)
-2. Pin module source to the provided commit SHA:
+2. Pin module source to the commit SHA returned by get_latest_module_version:
      source = "git::https://github.com/{org}/{modules_repo}.git//modules/{type}?ref={sha}"
 3. Consult the README to identify ALL required variables and their types.
    Do not omit required variables. Do not invent variable names.
@@ -56,17 +86,25 @@ Output ONLY this JSON — no prose, no markdown fences:
 """
 
 
-async def _fetch_module_context(
-    unit_type: str,
-    org: str,
-    modules_repo: str,
-) -> tuple[str, str]:
-    import asyncio
-    readme, sha = await asyncio.gather(
-        read_module_readme(unit_type, org, modules_repo),
-        get_latest_module_version(unit_type, org, modules_repo),
-    )
-    return readme, sha
+# Agent Framework tool wrappers around the raw MCP fetchers.
+read_module_readme_tool = tool(
+    _read_module_readme_raw,
+    name="read_module_readme",
+    description=(
+        "Fetch modules/{module_type}/README.md from a GitHub repo. "
+        "Returns the README content as plain text. "
+        "Falls back to a stub if the file is missing."
+    ),
+)
+
+get_latest_module_version_tool = tool(
+    _get_latest_module_version_raw,
+    name="get_latest_module_version",
+    description=(
+        "Return the latest commit SHA on main that touched modules/{module_type}/ "
+        "in the given repo. Use this SHA as the ?ref= value of the module source URL."
+    ),
+)
 
 
 def _build_user_message(
@@ -75,8 +113,6 @@ def _build_user_message(
     environment: str,
     org: str,
     modules_repo: str,
-    module_readme: str,
-    module_sha: str,
     feedback: Optional[str],
 ) -> str:
     unit_spec = {
@@ -91,15 +127,15 @@ def _build_user_message(
     }
 
     parts = [
-        f"Generate Terraform for the following infrastructure unit.",
+        "Generate Terraform for the following infrastructure unit. "
+        "Call read_module_readme and get_latest_module_version FIRST, "
+        "then produce main.tf + variables.tf.",
         f"\n=== Unit spec ===\n{json.dumps(unit_spec, indent=2)}",
-        f"\n=== Context ===",
+        "\n=== Context ===",
         f"ticket_id: {ticket_id}",
         f"environment: {environment}",
         f"module source org: {org}",
         f"modules repo: {modules_repo}",
-        f"module commit SHA (use as ?ref= value): {module_sha}",
-        f"\n=== Module README (defines required and optional variables) ===\n{module_readme}",
     ]
 
     if feedback:
@@ -135,21 +171,21 @@ async def run_terraform_agent(
     org: str,
     modules_repo: str,
 ) -> TerraformOutput:
+    """Run the TF Generator agent with read-readme + get-sha tools, eval, retry."""
     ticket_id = run.request.ticket_id if run.request else "UNKNOWN"
     environment = run.request.environment if run.request else "dev"
 
     repo = unit.resolved_repo or modules_repo
 
-    module_readme, module_sha = await _fetch_module_context(unit.type, org, repo)
-    logger.info(
-        "unit=%s module=%s sha=%s readme=%d chars",
-        unit.id, unit.type, module_sha[:7] if module_sha != "main" else "main", len(module_readme),
-    )
+    # Pin module SHA for the output record (informational).
+    # The agent will also fetch this independently via its tool.
+    module_sha = await _get_latest_module_version_raw(unit.type, org, repo)
 
     client = get_model_client()
     agent = client.as_agent(
         name="azure_tf_generator",
         instructions=_SYSTEM_PROMPT,
+        tools=[read_module_readme_tool, get_latest_module_version_tool],
     )
 
     feedback: Optional[str] = None
@@ -161,9 +197,7 @@ async def run_terraform_agent(
             ticket_id=ticket_id,
             environment=environment,
             org=org,
-            modules_repo=modules_repo,
-            module_readme=module_readme,
-            module_sha=module_sha,
+            modules_repo=repo,
             feedback=feedback,
         )
 
@@ -186,7 +220,8 @@ async def run_terraform_agent(
         if passed:
             logger.info(
                 "unit=%s terraform passed all evaluators on attempt %d (sha=%s)",
-                unit.id, attempt, module_sha[:7] if module_sha != "main" else "main",
+                unit.id, attempt,
+                module_sha[:7] if module_sha != "main" else "main",
             )
             break
 
