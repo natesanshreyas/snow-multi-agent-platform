@@ -98,7 +98,7 @@ python -m uvicorn demo_server:app --port 8001 --reload
 | `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint URL |
 | `AZURE_AI_MODEL_DEPLOYMENT` | Deployment name (e.g. `gpt-4o`) |
 | `AZURE_OPENAI_API_KEY` | Optional — omit to use managed identity |
-| `GITHUB_TOKEN` | GitHub API access for module search + PR creation |
+| `GITHUB_PERSONAL_ACCESS_TOKEN` | GitHub API access for module search + PR creation |
 | `GITHUB_ORG` | GitHub org owning the Terraform module repos |
 
 ### Local auth (no managed identity)

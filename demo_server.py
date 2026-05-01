@@ -3,7 +3,7 @@ demo_server.py — Combined Microsoft Agent Framework + Azure AI Foundry platfor
 
 Microsoft Agent Framework (agent-framework) runs all agent orchestration:
   client.as_agent(name=..., instructions=...) -> agent.run() loops with
-  evaluator-driven retries. Replaces the prior AutoGen 0.4 implementation.
+  evaluator-driven retries.
 
 Azure AI Foundry (azure-ai-projects) provides:
   - Model deployment (Azure OpenAI backed by Foundry project)

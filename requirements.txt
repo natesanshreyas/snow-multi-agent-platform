@@ -3,15 +3,16 @@ uvicorn[standard]>=0.29.0
 httpx>=0.27.0
 python-dotenv>=1.0.0
 
-# AutoGen 0.4 — agent orchestration (AssistantAgent, RoundRobinGroupChat, UserProxyAgent)
-autogen-agentchat>=0.7.5
-autogen-core>=0.7.5
-autogen-ext[openai]>=0.7.5
+# Microsoft Agent Framework SDK
+agent-framework --pre
 
-# Azure AI Foundry — model deployment, managed identity, Foundry portal tracing
+# Azure identity + AI Foundry (model deployment, managed identity, portal tracing)
 azure-ai-projects>=1.0.0b8
 azure-identity>=1.19.0
 azure-core>=1.32.0
+
+# Azure Content Safety (optional — used by ContentSafetyMiddleware when configured)
+# azure-ai-contentsafety>=1.0.0
 
 # Foundry telemetry (optional — enables traces in Foundry portal)
 # azure-monitor-opentelemetry>=1.6.0

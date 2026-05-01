@@ -673,7 +673,7 @@ async def simulate_workflow(run: WorkflowRun, cloud: str) -> None:
         try:
             _initial_plan = await _run_planner_agent(run.request)
             logger.info(
-                "MAF Planner Agent (initial): %d units, %d questions via AutoGen",
+                "MAF Planner Agent (initial): %d units, %d questions",
                 len(_initial_plan.units), len(_initial_plan.questions),
             )
         except Exception as _exc:
@@ -743,7 +743,7 @@ async def simulate_workflow(run: WorkflowRun, cloud: str) -> None:
         try:
             _final_plan = await _run_planner_agent(run.request, None, answers)
             logger.info(
-                "MAF Planner Agent (HITL final): %d units, finalized=%s via AutoGen",
+                "MAF Planner Agent (HITL final): %d units, finalized=%s",
                 len(_final_plan.units), _final_plan.finalized,
             )
         except Exception as _exc:
@@ -888,7 +888,7 @@ async def simulate_workflow(run: WorkflowRun, cloud: str) -> None:
     if _AGENTS_AVAILABLE:
         try:
             gh_mapping = await _run_github_search_agent(unit_types, org_name)
-            logger.info("MAF GH Search Agent resolved %d types via AutoGen: %s", len(gh_mapping), gh_mapping)
+            logger.info("MAF GH Search Agent resolved %d types: %s", len(gh_mapping), gh_mapping)
             for unit in run.plan.units:
                 unit.resolved_repo = gh_mapping.get(unit.type, module_repo)
         except Exception as _exc:
@@ -906,7 +906,7 @@ async def simulate_workflow(run: WorkflowRun, cloud: str) -> None:
             seen_types.add(unit.type)
             resolved = unit.resolved_repo or module_repo
             _mcp_emit(run, "gh_search", "mcp-github", "search_code",
-                f"GH Search Agent searching org for modules/{unit.type}/README.md — repo resolved at runtime by AutoGen",
+                f"GH Search Agent searching org for modules/{unit.type}/README.md — repo resolved at runtime by Agent Framework",
                 f"q: org:{org_name} path:modules/{unit.type} filename:README.md",
                 f"1 result: {resolved}",
                 duration_ms=random.randint(150, 320))
@@ -979,7 +979,7 @@ async def simulate_workflow(run: WorkflowRun, cloud: str) -> None:
                     plan_unit.eval_scores = {r.evaluator: r.score for r in tf_output.eval_results}
                     _wave_tf_outputs[unit_cfg["id"]] = tf_output.main_tf
                     logger.info(
-                        "MAF TF Agent unit=%s passed=%s via AutoGen",
+                        "MAF TF Agent unit=%s passed=%s",
                         unit_cfg["id"], tf_output.passed,
                     )
                 except Exception as _exc:
