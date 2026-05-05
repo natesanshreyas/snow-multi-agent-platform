@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: snow-multi-agent
+  labels:
+    app: snow-multi-agent
+  annotations:
+    kubernetes.io/ingress.class: nginx
+spec:
+  rules:
+    # Replace with your AKS ingress hostname
+    # Example: snow-multi-agent.eastus2.cloudapp.azure.com
+    - host: snow-multi-agent.eastus2.cloudapp.azure.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: snow-multi-agent
+                port:
+                  number: 80

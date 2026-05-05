@@ -1,0 +1,37 @@
+# ── Image ────────────────────────────────────────────────────────────────────
+image:
+  repository: <YOUR_ACR>.azurecr.io/snow-multi-agent
+  tag: latest
+  pullPolicy: Always
+
+# ── Replicas ─────────────────────────────────────────────────────────────────
+replicaCount: 1
+
+# ── Resources ────────────────────────────────────────────────────────────────
+resources:
+  requests:
+    cpu: "250m"
+    memory: "512Mi"
+  limits:
+    cpu: "1000m"
+    memory: "2Gi"
+
+# ── Ingress ───────────────────────────────────────────────────────────────────
+ingress:
+  host: snow-multi-agent.eastus2.cloudapp.azure.com
+
+# ── Non-secret config (ConfigMap) ─────────────────────────────────────────────
+config:
+  AZURE_OPENAI_ENDPOINT: "https://<YOUR_HUB>.openai.azure.com/"
+  AZURE_AI_MODEL_DEPLOYMENT: "gpt-4o"
+  AZURE_OPENAI_API_VERSION: "2025-04-01-preview"
+  GITHUB_ORG: "natesanshreyas"
+  GITHUB_MODULES_REPO: "terraform-modules-demo"
+  DEFAULT_ENVIRONMENT: "dev"
+  FRONTEND_URL: "http://localhost:3000"
+  DEMO_MODE: "false"
+
+# ── Secrets (set at install time via --set or a secrets values file) ──────────
+secrets:
+  AZURE_OPENAI_API_KEY: ""
+  GITHUB_PERSONAL_ACCESS_TOKEN: ""

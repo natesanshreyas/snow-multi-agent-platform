@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: snow-multi-agent
+  labels:
+    app: snow-multi-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: snow-multi-agent
+  template:
+    metadata:
+      labels:
+        app: snow-multi-agent
+    spec:
+      containers:
+        - name: snow-multi-agent
+          image: <YOUR_ACR>.azurecr.io/snow-multi-agent:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8001
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: snow-multi-agent-config
+            - secretRef:
+                name: snow-multi-agent-secrets
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "2Gi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3

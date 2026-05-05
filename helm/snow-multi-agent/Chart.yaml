@@ -1,0 +1,6 @@
+apiVersion: v2
+name: snow-multi-agent
+description: ServiceNow → Terraform multi-agent provisioning platform (MS Agent Framework)
+type: application
+version: 0.1.0
+appVersion: "latest"

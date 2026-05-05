@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: snow-multi-agent
+  labels:
+    app: snow-multi-agent
+spec:
+  type: ClusterIP
+  selector:
+    app: snow-multi-agent
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 8001

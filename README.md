@@ -1,6 +1,6 @@
 # snow-multi-agent-platform
 
-ServiceNow → Terraform multi-agent provisioning platform using **Microsoft Agent Framework SDK + Azure AI Foundry**.
+ServiceNow → Terraform multi-agent provisioning platform using **Microsoft Agent Framework SDK + Azure OpenAI**.
 
 ---
 
@@ -17,6 +17,8 @@ A ServiceNow ticket triggers an agentic pipeline that plans, searches, generates
 
 Evaluators (correctness, security, compliance) are plain functions — not agents.
 
+All agent orchestration runs **in-process** via the MS Agent Framework SDK. Azure AI Foundry is used only for OpenTelemetry tracing (optional).
+
 ---
 
 ## Agent pattern (`agents/client.py`)
@@ -24,12 +26,12 @@ Evaluators (correctness, security, compliance) are plain functions — not agent
 All agents use Microsoft Agent Framework SDK with Azure OpenAI backed by managed identity:
 
 ```python
-from agent_framework.azure import AzureOpenAIChatClient
+from agent_framework.openai import OpenAIChatClient
 from azure.identity import DefaultAzureCredential
 
-client = AzureOpenAIChatClient(
-    endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-    deployment=os.environ["AZURE_AI_MODEL_DEPLOYMENT"],
+client = OpenAIChatClient(
+    model=os.environ["AZURE_AI_MODEL_DEPLOYMENT"],
+    azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
     credential=DefaultAzureCredential(),
 )
 
@@ -38,7 +40,7 @@ result = await agent.run(ticket_message)
 raw = result.text
 ```
 
-`DefaultAzureCredential` picks up managed identity on Azure Container Apps and falls back to `az login` locally — no API keys in config.
+`DefaultAzureCredential` picks up workload identity on AKS and falls back to `az login` locally — no API keys in config.
 
 ---
 
@@ -91,6 +93,12 @@ cp .env.example .env   # fill in AZURE_OPENAI_ENDPOINT + AZURE_AI_MODEL_DEPLOYME
 python -m uvicorn demo_server:app --port 8001 --reload
 ```
 
+### Mock mode (no credentials)
+
+```bash
+MOCK_LLM=true DEMO_MODE=true python -m uvicorn demo_server:app --port 8001 --reload
+```
+
 ### Required env vars
 
 | Variable | Purpose |
@@ -106,4 +114,68 @@ python -m uvicorn demo_server:app --port 8001 --reload
 ```bash
 az login
 # DefaultAzureCredential picks up the az login session automatically
+```
+
+---
+
+## Deploying to AKS
+
+### 1. Build and push to ACR
+
+```bash
+# Build image
+docker build -t <YOUR_ACR>.azurecr.io/snow-multi-agent:latest .
+
+# Push to ACR
+az acr login --name <YOUR_ACR>
+docker push <YOUR_ACR>.azurecr.io/snow-multi-agent:latest
+```
+
+### 2. Configure
+
+Edit `k8s/configmap.yaml` with your Azure OpenAI endpoint and GitHub org, then create your secret:
+
+```bash
+cp k8s/secret.yaml k8s/secret.yaml.local
+# Fill in AZURE_OPENAI_API_KEY and GITHUB_PERSONAL_ACCESS_TOKEN
+# (leave keys empty if using workload identity)
+```
+
+### 3. Deploy with kubectl
+
+```bash
+kubectl apply -f k8s/configmap.yaml
+kubectl apply -f k8s/secret.yaml.local
+kubectl apply -f k8s/deployment.yaml
+kubectl apply -f k8s/service.yaml
+kubectl apply -f k8s/ingress.yaml
+```
+
+### 3a. Deploy with Helm (alternative)
+
+```bash
+helm upgrade --install snow-multi-agent helm/snow-multi-agent \
+  --set image.repository=<YOUR_ACR>.azurecr.io/snow-multi-agent \
+  --set config.AZURE_OPENAI_ENDPOINT=https://<YOUR_HUB>.openai.azure.com/ \
+  --set secrets.GITHUB_PERSONAL_ACCESS_TOKEN=<TOKEN>
+```
+
+### 4. Workload identity (managed identity on AKS)
+
+When running on AKS with workload identity, leave `AZURE_OPENAI_API_KEY` empty. Assign the AKS pod identity the **Cognitive Services OpenAI User** role on your Azure OpenAI resource:
+
+```bash
+az role assignment create \
+  --role "Cognitive Services OpenAI User" \
+  --assignee <pod-identity-client-id> \
+  --scope /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.CognitiveServices/accounts/<openai-name>
+```
+
+### Verify
+
+```bash
+kubectl get pods
+kubectl logs -f deployment/snow-multi-agent
+curl http://<ingress-host>/health
+# → {"status":"ok"}
 ```
