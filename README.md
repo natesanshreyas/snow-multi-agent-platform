@@ -120,62 +120,64 @@ az login
 
 ## Deploying to AKS
 
-### 1. Build and push to ACR
+### Prerequisites
 
+- AKS cluster with **OIDC issuer** and **workload identity** addon enabled:
+  ```bash
+  az aks update \
+    --name <your-cluster> \
+    --resource-group <your-rg> \
+    --enable-oidc-issuer \
+    --enable-workload-identity
+  ```
+- ACR attached to the cluster:
+  ```bash
+  az aks update \
+    --name <your-cluster> \
+    --resource-group <your-rg> \
+    --attach-acr <your-acr>
+  ```
+
+### Deploy (3 steps)
+
+**1. Fill in your config:**
 ```bash
-# Build image
-docker build -t <YOUR_ACR>.azurecr.io/snow-multi-agent:latest .
-
-# Push to ACR
-az acr login --name <YOUR_ACR>
-docker push <YOUR_ACR>.azurecr.io/snow-multi-agent:latest
+cp .deploy.env.example .deploy.env
+# Edit .deploy.env — 6 values to set
 ```
 
-### 2. Configure
-
-Edit `k8s/configmap.yaml` with your Azure OpenAI endpoint and GitHub org, then create your secret:
-
+**2. Run the deploy script:**
 ```bash
-cp k8s/secret.yaml k8s/secret.yaml.local
-# Fill in AZURE_OPENAI_API_KEY and GITHUB_PERSONAL_ACCESS_TOKEN
-# (leave keys empty if using workload identity)
+./deploy.sh
 ```
 
-### 3. Deploy with kubectl
+That's it. The script handles everything: creates the managed identity, wires workload identity, assigns the OpenAI role, builds and pushes the image via `az acr build` (no local Docker needed), and applies all k8s manifests.
 
+**3. Verify:**
 ```bash
-kubectl apply -f k8s/configmap.yaml
-kubectl apply -f k8s/secret.yaml.local
-kubectl apply -f k8s/deployment.yaml
-kubectl apply -f k8s/service.yaml
-kubectl apply -f k8s/ingress.yaml
+curl http://<ingress-ip>/health
+# → {"status":"ok"}
 ```
 
-### 3a. Deploy with Helm (alternative)
+### What deploy.sh does
+
+1. Creates a user-assigned managed identity
+2. Reads the AKS OIDC issuer URL and creates a federated credential (links the K8s `ServiceAccount` to the managed identity — no secrets involved)
+3. Assigns `Cognitive Services OpenAI User` role to the identity on your OpenAI resource
+4. Builds and pushes the image using `az acr build`
+5. Substitutes all placeholder values into the k8s manifests and applies them in order
+6. Waits for the rollout to complete
+
+### Helm (alternative to deploy.sh)
+
+If you prefer Helm over the script:
 
 ```bash
 helm upgrade --install snow-multi-agent helm/snow-multi-agent \
-  --set image.repository=<YOUR_ACR>.azurecr.io/snow-multi-agent \
-  --set config.AZURE_OPENAI_ENDPOINT=https://<YOUR_HUB>.openai.azure.com/ \
-  --set secrets.GITHUB_PERSONAL_ACCESS_TOKEN=<TOKEN>
-```
-
-### 4. Workload identity (managed identity on AKS)
-
-When running on AKS with workload identity, leave `AZURE_OPENAI_API_KEY` empty. Assign the AKS pod identity the **Cognitive Services OpenAI User** role on your Azure OpenAI resource:
-
-```bash
-az role assignment create \
-  --role "Cognitive Services OpenAI User" \
-  --assignee <pod-identity-client-id> \
-  --scope /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.CognitiveServices/accounts/<openai-name>
-```
-
-### Verify
-
-```bash
-kubectl get pods
-kubectl logs -f deployment/snow-multi-agent
-curl http://<ingress-host>/health
-# → {"status":"ok"}
+  --set image.repository=<ACR>.azurecr.io/snow-multi-agent \
+  --set workloadIdentity.clientId=<managed-identity-client-id> \
+  --set config.AZURE_OPENAI_ENDPOINT=https://<hub>.openai.azure.com/ \
+  --set config.AZURE_CLIENT_ID=<client-id> \
+  --set config.AZURE_TENANT_ID=<tenant-id> \
+  --set secrets.GITHUB_PERSONAL_ACCESS_TOKEN=<token>
 ```

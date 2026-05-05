@@ -13,7 +13,9 @@ spec:
     metadata:
       labels:
         app: {{ .Release.Name }}
+        azure.workload.identity/use: "true"
     spec:
+      serviceAccountName: {{ .Release.Name }}
       containers:
         - name: {{ .Release.Name }}
           image: {{ .Values.image.repository }}:{{ .Values.image.tag }}

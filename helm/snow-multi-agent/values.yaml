@@ -21,10 +21,15 @@ ingress:
   host: snow-multi-agent.eastus2.cloudapp.azure.com
 
 # ── Non-secret config (ConfigMap) ─────────────────────────────────────────────
+workloadIdentity:
+  clientId: ""   # managed identity client ID — set via --set or deploy.sh handles this
+
 config:
   AZURE_OPENAI_ENDPOINT: "https://<YOUR_HUB>.openai.azure.com/"
   AZURE_AI_MODEL_DEPLOYMENT: "gpt-4o"
   AZURE_OPENAI_API_VERSION: "2025-04-01-preview"
+  AZURE_CLIENT_ID: ""    # populated by deploy.sh
+  AZURE_TENANT_ID: ""    # populated by deploy.sh
   GITHUB_ORG: "natesanshreyas"
   GITHUB_MODULES_REPO: "terraform-modules-demo"
   DEFAULT_ENVIRONMENT: "dev"
@@ -33,5 +38,4 @@ config:
 
 # ── Secrets (set at install time via --set or a secrets values file) ──────────
 secrets:
-  AZURE_OPENAI_API_KEY: ""
   GITHUB_PERSONAL_ACCESS_TOKEN: ""

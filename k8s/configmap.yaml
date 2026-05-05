@@ -5,16 +5,13 @@ metadata:
   labels:
     app: snow-multi-agent
 data:
-  # Azure OpenAI — find in Azure portal: your OpenAI resource → Keys and Endpoint
-  AZURE_OPENAI_ENDPOINT: "https://<YOUR_HUB>.openai.azure.com/"
-  AZURE_AI_MODEL_DEPLOYMENT: "gpt-4o"
+  AZURE_OPENAI_ENDPOINT: "<OPENAI_ENDPOINT>"
+  AZURE_AI_MODEL_DEPLOYMENT: "<MODEL_DEPLOYMENT>"
   AZURE_OPENAI_API_VERSION: "2025-04-01-preview"
-
-  # GitHub — org and repo containing your Terraform modules
+  AZURE_CLIENT_ID: "<AZURE_CLIENT_ID>"
+  AZURE_TENANT_ID: "<AZURE_TENANT_ID>"
   GITHUB_ORG: "natesanshreyas"
   GITHUB_MODULES_REPO: "terraform-modules-demo"
-
-  # Platform
   DEFAULT_ENVIRONMENT: "dev"
   FRONTEND_URL: "http://localhost:3000"
   DEMO_MODE: "false"

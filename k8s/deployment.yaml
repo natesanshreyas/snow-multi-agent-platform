@@ -13,7 +13,9 @@ spec:
     metadata:
       labels:
         app: snow-multi-agent
+        azure.workload.identity/use: "true"
     spec:
+      serviceAccountName: snow-multi-agent
       containers:
         - name: snow-multi-agent
           image: <YOUR_ACR>.azurecr.io/snow-multi-agent:latest
